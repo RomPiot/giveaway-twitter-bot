@@ -1,7 +1,6 @@
 import ast
 import time
 from datetime import timedelta
-
 import pandas as pd
 
 import config
@@ -11,6 +10,7 @@ from src.enum.comment_status import CommentStatus
 from src.enum.run_action import RunAction
 from src.twitter.twitter_api import TwitterApi
 from src.csv import CSV
+from src.imported_tweets import ImportedTweets
 from src.date import Date
 
 
@@ -18,13 +18,13 @@ class GiveawayBot:
 
     def __init__(self):
         self.csv = CSV()
+        self.import_tweet = ImportedTweets()
         self.csv.create_giveaway_list()
         self.twitter = TwitterApi()
         self.limit_follow = 50
         self.limit_retweet = 50
         self.limit_like = 50
         self.limit_minutes = 15
-
         user = self.twitter.api.get_user(screen_name=config.twitter_account_tag)
         self.username = user.screen_name
         self.user_id = user.id
@@ -34,7 +34,6 @@ class GiveawayBot:
 
     def run(self, action: int):
         self.action = action
-
         giveaway_list = self.csv.get_df_data()
 
         if action == RunAction.ONLY_COMMENT.value:
@@ -50,7 +49,6 @@ class GiveawayBot:
 
         for index, row in giveaway_list_untreated.iterrows():
             nb_remaining_tweets -= 1
-
             Print.blue(f"Remaining tweets: {nb_remaining_tweets}")
             Print.blue(f"Analyzing tweet {self.get_tweet_url(row)}")
 
@@ -64,12 +62,8 @@ class GiveawayBot:
                 continue
 
             self.like_tweet(row)
-
-            # Retweet
             self.retweet_tweet(row)
-
             self.follow_users(row)
-
             self.comment_tweet(giveaway_list, row)
             self.tweet_is_treated(giveaway_list, row)
 
@@ -102,16 +96,22 @@ class GiveawayBot:
         Print.blue("Import latest tweets")
 
         csv_data = self.csv.get_df_data()
-
+        tweets_imported = self.import_tweet.get_tweet_ids_from_file()
         tweets_found = self.twitter.search_tweets()
         tweets_to_add = []
 
         for tweet in tweets_found:
-            # if it's a retweet, we get the original tweet
+            if str(tweet.id) in tweets_imported:
+                continue
+
+            tweets_imported = self.import_tweet.add_tweet_id_to_file(str(tweet.id), tweets_imported)
+
+            # if it's a retweet or a reply, we get the original tweet
             while True:
                 if hasattr(tweet, "retweeted_status"):
                     if tweet.retweeted_status is not None:
                         tweet = tweet.retweeted_status
+                        tweets_imported = self.import_tweet.add_tweet_id_to_file(str(tweet.id), tweets_imported)
                     else:
                         break
 
@@ -119,6 +119,7 @@ class GiveawayBot:
                     if tweet.in_reply_to_status_id is not None:
                         try:
                             tweet = self.twitter.get_tweet_by_id(tweet.in_reply_to_status_id)
+                            tweets_imported = self.import_tweet.add_tweet_id_to_file(str(tweet.id), tweets_imported)
                         except Exception as e:
                             Print.red(f"Can't getting the original tweet from the tweet id: {tweet.id}")
                             break
@@ -127,6 +128,17 @@ class GiveawayBot:
                         break
                 else:
                     break
+
+            keyword_found = False
+
+            for search_tag in config.search_tags:
+                if search_tag in tweet.full_text.lower():
+                    keyword_found = True
+                    break
+
+            if not keyword_found:
+                Print.red(f"Keyword not found in tweet {tweet.id}")
+                continue
 
             data_to_write = {
                 "created_at": Date.now(),
@@ -383,9 +395,14 @@ class GiveawayBot:
         giveaway_list.to_csv(self.csv.filename, index=False, sep=";")
 
     def tweet_comment_is_required(self, giveaway_list: pd.DataFrame, row, message: str = "Tweet require a comment!"):
-        Print.red(message)
+        Print.orange(message)
         giveaway_list.loc[giveaway_list.tweet_id == row.tweet_id, 'comment_status'] = CommentStatus.REQUIRED.value
         giveaway_list.to_csv(self.csv.filename, index=False, sep=";")
 
     def get_tweet_url(self, row):
         return f"https://twitter.com/{row.tweet_user_screen_name}/status/{row.tweet_id}"
+
+    # search id in file
+    def is_tweet_id_in_file(self, filename, tweet_id):
+        tweets = self.read_tweet_id_from_file(filename)
+        return tweet_id in tweets

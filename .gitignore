@@ -2,3 +2,4 @@
 .venv
 *.csv
 .env
+imported_tweet_ids.txt

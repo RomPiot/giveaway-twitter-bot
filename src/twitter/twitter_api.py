@@ -1,12 +1,14 @@
 import tweepy
 
 import config
+from src.imported_tweets import ImportedTweets
 
 
 class TwitterApi:
     def __init__(self):
         self.client = self.get_twitter_client()
         self.api = self.get_twitter_api()
+        self.imported_tweets = ImportedTweets()
 
     @staticmethod
     def get_twitter_api():
@@ -40,6 +42,13 @@ class TwitterApi:
             searched_tweets += self.api.search_tweets(
                 q=x, count=nb_tweets, tweet_mode="extended", result_type="mixed"
             )
+
+        searched_tweets = [
+            tweet for tweet in searched_tweets if str(tweet.id) not in self.imported_tweets.get_tweet_ids_from_file()
+        ]
+
+        return searched_tweets
+
 
         return searched_tweets
 
